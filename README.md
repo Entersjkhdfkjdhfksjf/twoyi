@@ -30,7 +30,7 @@
   </p>
   <br />
   <p>
-    <a href="https://twoyi.io">
+    <a href="">
       <img
         src="https://github.com/twoyi/twoyi/blob/main/assets/twoyi_screen.jpg?raw=true"
         alt="Screenshot"
