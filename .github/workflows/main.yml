@@ -17,7 +17,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y p7zip-full android-sdk-libsparse-utils unzip rsync file openjdk-17-jre-headless
+          sudo apt-get install -y p7zip-full android-sdk-libsparse-utils unzip rsync file xxd erofs-utils openjdk-17-jre-headless
 
       # rootfs.7z is ~200MB — over GitHub's 100MB plain-git push limit —
       # so it's pulled from your fork's Release asset instead of being
@@ -91,9 +91,30 @@ jobs:
 
       - name: Merge into twoyi rootfs layout
         run: |
+          echo "--- diagnosing raw images before mount ---"
+          file system.raw.img
+          file vendor.raw.img
+          ls -la system.raw.img vendor.raw.img
+          xxd -l 64 system.raw.img
+
           mkdir -p mnt_sys mnt_vendor
-          sudo mount -o loop,ro system.raw.img mnt_sys
-          sudo mount -o loop,ro vendor.raw.img mnt_vendor
+
+          mount_image() {
+            local img=$1 dest=$2
+            if sudo mount -t ext4 -o loop,ro "$img" "$dest" 2>/tmp/mounterr; then
+              echo "$img mounted as ext4"
+            elif sudo mount -t erofs -o loop,ro "$img" "$dest" 2>>/tmp/mounterr; then
+              echo "$img mounted as erofs"
+            else
+              echo "::error::Could not mount $img as ext4 or erofs"
+              cat /tmp/mounterr
+              sudo dmesg | tail -30
+              exit 1
+            fi
+          }
+
+          mount_image system.raw.img mnt_sys
+          mount_image vendor.raw.img mnt_vendor
 
           # Keep twoyi's own scaffolding (init.superuser.rc, rom.ini,
           # sepolicy, *_contexts, init.goldfish.rc/fstab.goldfish for the
