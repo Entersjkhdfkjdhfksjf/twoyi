@@ -1,44 +1,109 @@
 name: build-rootfs
-on: workflow_dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_level:
+        description: 'Target Android API level (29 = Android 10)'
+        default: '29'
+        required: false
+
 jobs:
   assemble:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4   # repo holding the extracted twoyi rootfs/
+      - uses: actions/checkout@v4
 
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y p7zip-full android-sdk-libsparse-utils unzip openjdk-17-jre-headless
+          sudo apt-get install -y p7zip-full android-sdk-libsparse-utils unzip rsync file openjdk-17-jre-headless
 
-      - name: Install sdkmanager and fetch Android 10 arm64 system image
+      # rootfs.7z is ~200MB — over GitHub's 100MB plain-git push limit —
+      # so it lives as a Release asset on your fork instead of being
+      # committed to the repo. Upload it once via Releases > attach file,
+      # then update this URL to point at that release/asset.
+      - name: Fetch base twoyi rootfs
+        run: |
+          curl -L -o rootfs.7z "https://github.com/<you>/<your-fork>/releases/download/base-rootfs/rootfs.7z"
+          7z x -y rootfs.7z -o./base
+
+      # p7zip's extractor refuses to write symlinks it considers "dangerous"
+      # (absolute targets, or relative targets that look like they escape
+      # the destination dir) even though they're valid once this tree
+      # becomes an actual root filesystem. It silently skips them rather
+      # than failing the job, so recreate them explicitly. This exact list
+      # came from the "Dangerous link path was ignored" warnings 7z printed
+      # on the original rootfs.7z.
+      - name: Restore symlinks p7zip drops on extraction
+        run: |
+          cd base/rootfs
+          ln -sf /sbin/charger charger
+          ln -sf ../init sbin/ueventd
+          ln -sf ../init sbin/watchdogd
+          ln -sf /system/lib64/libbluetooth_jni.so system/app/Bluetooth/lib/arm64/libbluetooth_jni.so
+          ln -sf /system/lib64/libcups.so system/app/BuiltInPrintService/lib/arm64/libcups.so
+          ln -sf /system/lib64/libwfds.so system/app/BuiltInPrintService/lib/arm64/libwfds.so
+          ln -sf /system/lib64/libjni_latinime.so system/app/LatinIME/lib/arm64/libjni_latinime.so
+          ln -sf /system/lib64/libdefcontainer_jni.so system/priv-app/DefaultContainerService/lib/arm64/libdefcontainer_jni.so
+          cd -
+
+      - name: Install sdkmanager and fetch target Android arm64 system image
         run: |
           curl -L -o cmdline-tools.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
           unzip -q cmdline-tools.zip -d cmdline-tools
           yes | ./cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$PWD/sdk --licenses
-          ./cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$PWD/sdk "system-images;android-29;google_apis;arm64-v8a"
+          ./cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$PWD/sdk \
+            "system-images;android-${{ github.event.inputs.api_level }};google_apis;arm64-v8a"
 
-      - name: Convert sparse images to raw ext4
+      # Don't assume sparse format — sdkmanager's emulator images are
+      # typically already plain raw ext4, unlike device factory/OTA
+      # images. This is almost certainly why simg2img failed with
+      # "Invalid sparse file format at header magic" last run.
+      - name: Inspect and convert images if needed
         run: |
-          IMG=sdk/system-images/android-29/google_apis/arm64-v8a
-          simg2img $IMG/system.img system.raw.img
-          simg2img $IMG/vendor.img vendor.raw.img
+          IMG=sdk/system-images/android-${{ github.event.inputs.api_level }}/google_apis/arm64-v8a
+          echo "--- image formats ---"
+          file "$IMG/system.img"
+          file "$IMG/vendor.img"
+
+          convert_if_sparse() {
+            local infile=$1 outfile=$2
+            if file "$infile" | grep -qi "sparse"; then
+              echo "Sparse image detected, converting: $infile"
+              simg2img "$infile" "$outfile"
+            else
+              echo "Already raw, copying: $infile"
+              cp "$infile" "$outfile"
+            fi
+          }
+
+          convert_if_sparse "$IMG/system.img" system.raw.img
+          convert_if_sparse "$IMG/vendor.img" vendor.raw.img
 
       - name: Merge into twoyi rootfs layout
         run: |
           mkdir -p mnt_sys mnt_vendor
           sudo mount -o loop,ro system.raw.img mnt_sys
           sudo mount -o loop,ro vendor.raw.img mnt_vendor
-          # keep twoyi's own scaffolding (init.superuser.rc, rom.ini, sepolicy,
-          # *_contexts, init.goldfish.rc/fstab.goldfish for the 10.0.2.x networking)
-          # replace everything under rootfs/system/ with the new build's content,
-          # then merge vendor's content into rootfs/system/vendor/
-          sudo rsync -a --delete mnt_sys/ rootfs/system/
-          sudo rsync -a mnt_vendor/ rootfs/system/vendor/
+
+          # Keep twoyi's own scaffolding (init.superuser.rc, rom.ini,
+          # sepolicy, *_contexts, init.goldfish.rc/fstab.goldfish for the
+          # 10.0.2.x networking) and replace everything under
+          # rootfs/system/ with the new build's content.
+          sudo rsync -a --delete mnt_sys/ base/rootfs/system/
+          sudo rsync -a mnt_vendor/ base/rootfs/system/vendor/
+
           sudo umount mnt_sys mnt_vendor
 
+      # -snl stores symlinks as symlinks instead of dereferencing them
+      # into copies. If your installed 7z build rejects this flag, check
+      # `7z --help` for the equivalent on that version before dropping it —
+      # without it you'll silently re-lose the same symlinks fixed above.
       - name: Repackage
-        run: 7z a -mx=9 custom_rootfs.7z rootfs/
+        run: |
+          cd base
+          7z a -mx=9 -snl ../custom_rootfs.7z rootfs/
 
       - uses: actions/upload-artifact@v4
         with:
