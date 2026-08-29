@@ -25,7 +25,16 @@ jobs:
       - name: Fetch base twoyi rootfs
         run: |
           curl -L -o rootfs.7z "https://github.com/Entersjkhdfkjdhfksjf/twoyi/releases/download/Resources/rootfs.7z"
-          7z x -y rootfs.7z -o./base
+
+          # 7z exits 2 whenever it drops a "dangerous" symlink on extraction
+          # (the 8 known ones fixed in the next step) — that's expected here,
+          # not a real failure, so don't let it kill the step under `bash -e`.
+          7z x -y rootfs.7z -o./base || true
+
+          # Real sanity check instead: a corrupted download or wrong archive
+          # should still fail the job loudly. init is a plain file, not a
+          # symlink, so its presence confirms extraction actually ran.
+          test -f base/rootfs/init || { echo "::error::rootfs extraction failed — base/rootfs/init missing"; exit 1; }
 
       # p7zip's extractor refuses to write symlinks it considers "dangerous"
       # (absolute targets, or relative targets that look like they escape
