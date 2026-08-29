@@ -94,20 +94,35 @@ jobs:
           echo "--- diagnosing raw images before mount ---"
           file system.raw.img
           file vendor.raw.img
-          ls -la system.raw.img vendor.raw.img
-          xxd -l 64 system.raw.img
 
           mkdir -p mnt_sys mnt_vendor
+          declare -a LOOPDEVS
 
+          # system.raw.img/vendor.raw.img turned out to be full GPT-
+          # partitioned disk images (file reports ID=0xee, the GPT
+          # protective-MBR signature), not bare filesystems — the real
+          # ext4/erofs data lives inside a partition, not at byte 0.
+          # losetup -P exposes the GPT-parsed partitions as loop0p1 etc.
           mount_image() {
             local img=$1 dest=$2
-            if sudo mount -t ext4 -o loop,ro "$img" "$dest" 2>/tmp/mounterr; then
-              echo "$img mounted as ext4"
-            elif sudo mount -t erofs -o loop,ro "$img" "$dest" 2>>/tmp/mounterr; then
-              echo "$img mounted as erofs"
-            else
-              echo "::error::Could not mount $img as ext4 or erofs"
-              cat /tmp/mounterr
+            local loopdev part mounted=0
+            loopdev=$(sudo losetup -f -P --show "$img")
+            LOOPDEVS+=("$loopdev")
+            echo "$img attached as $loopdev, partitions found:"
+            ls "${loopdev}"p* 2>/dev/null || echo "(none — may not be GPT after all)"
+
+            for part in "${loopdev}"p*; do
+              [ -b "$part" ] || continue
+              if sudo mount -t ext4 -o ro "$part" "$dest" 2>/tmp/mounterr; then
+                echo "$part mounted as ext4 on $dest"; mounted=1; break
+              elif sudo mount -t erofs -o ro "$part" "$dest" 2>>/tmp/mounterr; then
+                echo "$part mounted as erofs on $dest"; mounted=1; break
+              fi
+            done
+
+            if [ "$mounted" -ne 1 ]; then
+              echo "::error::Could not mount any partition of $img"
+              cat /tmp/mounterr 2>/dev/null
               sudo dmesg | tail -30
               exit 1
             fi
@@ -124,6 +139,7 @@ jobs:
           sudo rsync -a mnt_vendor/ base/rootfs/system/vendor/
 
           sudo umount mnt_sys mnt_vendor
+          for d in "${LOOPDEVS[@]}"; do sudo losetup -d "$d"; done
 
       # -snl stores symlinks as symlinks instead of dereferencing them
       # into copies. If your installed 7z build rejects this flag, check
