@@ -20,12 +20,11 @@ jobs:
           sudo apt-get install -y p7zip-full android-sdk-libsparse-utils unzip rsync file openjdk-17-jre-headless
 
       # rootfs.7z is ~200MB — over GitHub's 100MB plain-git push limit —
-      # so it lives as a Release asset on your fork instead of being
-      # committed to the repo. Upload it once via Releases > attach file,
-      # then update this URL to point at that release/asset.
+      # so it's pulled from your fork's Release asset instead of being
+      # committed to the repo.
       - name: Fetch base twoyi rootfs
         run: |
-          curl -L -o rootfs.7z "https://github.com/<you>/<your-fork>/releases/download/base-rootfs/rootfs.7z"
+          curl -L -o rootfs.7z "https://github.com/Entersjkhdfkjdhfksjf/twoyi/releases/download/Resources/rootfs.7z"
           7z x -y rootfs.7z -o./base
 
       # p7zip's extractor refuses to write symlinks it considers "dangerous"
