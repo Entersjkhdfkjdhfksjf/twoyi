@@ -113,15 +113,22 @@ jobs:
 
             for part in "${loopdev}"p*; do
               [ -b "$part" ] || continue
-              if sudo mount -t ext4 -o ro "$part" "$dest" 2>/tmp/mounterr; then
-                echo "$part mounted as ext4 on $dest"; mounted=1; break
-              elif sudo mount -t erofs -o ro "$part" "$dest" 2>>/tmp/mounterr; then
-                echo "$part mounted as erofs on $dest"; mounted=1; break
-              fi
+              echo "--- diagnosing $part ---"
+              sudo blkid "$part" || echo "blkid: no recognizable signature"
+              sudo file -s "$part" || true
+            done
+
+            for part in "${loopdev}"p*; do
+              [ -b "$part" ] || continue
+              for fstype in ext4 erofs f2fs vfat; do
+                if sudo mount -t "$fstype" -o ro "$part" "$dest" 2>>/tmp/mounterr; then
+                  echo "$part mounted as $fstype on $dest"; mounted=1; break 2
+                fi
+              done
             done
 
             if [ "$mounted" -ne 1 ]; then
-              echo "::error::Could not mount any partition of $img"
+              echo "::error::Could not mount any partition of $img with a known fs type"
               cat /tmp/mounterr 2>/dev/null
               sudo dmesg | tail -30
               exit 1
