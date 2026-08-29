@@ -178,7 +178,8 @@ jobs:
       - name: Repackage
         run: |
           cd base
-          7z a -mx=9 -snl ../custom_rootfs.7z rootfs/
+          sudo 7z a -mx=9 -snl ../custom_rootfs.7z rootfs/
+          sudo chown "$(id -u)":"$(id -g)" ../custom_rootfs.7z
 
       - uses: actions/upload-artifact@v4
         with:
