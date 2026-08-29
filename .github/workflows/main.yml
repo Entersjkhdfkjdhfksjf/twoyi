@@ -89,54 +89,79 @@ jobs:
           convert_if_sparse "$IMG/system.img" system.raw.img
           convert_if_sparse "$IMG/vendor.img" vendor.raw.img
 
+      - name: Fetch lpunpack (pure-Python super.img extractor, no device-mapper needed)
+        run: curl -L -o lpunpack.py "https://raw.githubusercontent.com/unix3dgforce/lpunpack/master/lpunpack.py"
+
       - name: Merge into twoyi rootfs layout
         run: |
           echo "--- diagnosing raw images before mount ---"
           file system.raw.img
           file vendor.raw.img
 
-          mkdir -p mnt_sys mnt_vendor
+          mkdir -p mnt_sys mnt_vendor extracted_sys extracted_vendor
           declare -a LOOPDEVS
 
-          # system.raw.img/vendor.raw.img turned out to be full GPT-
-          # partitioned disk images (file reports ID=0xee, the GPT
-          # protective-MBR signature), not bare filesystems — the real
-          # ext4/erofs data lives inside a partition, not at byte 0.
-          # losetup -P exposes the GPT-parsed partitions as loop0p1 etc.
-          mount_image() {
-            local img=$1 dest=$2
-            local loopdev part mounted=0
+          # system.raw.img/vendor.raw.img turned out to be full GPT disk
+          # images containing "vbmeta" (verified-boot signatures, not
+          # filesystem data — ignore it) and "super" (Android's dynamic-
+          # partition container, introduced as mandatory in Android 10 —
+          # explains why this showed up right at API 29). super isn't a
+          # filesystem itself; it holds logical partitions packed together
+          # via LP metadata, which lpunpack.py extracts directly.
+          extract_super() {
+            local img=$1 outdir=$2
+            local loopdev part superpart=""
             loopdev=$(sudo losetup -f -P --show "$img")
             LOOPDEVS+=("$loopdev")
-            echo "$img attached as $loopdev, partitions found:"
-            ls "${loopdev}"p* 2>/dev/null || echo "(none — may not be GPT after all)"
+            echo "$img attached as $loopdev"
 
             for part in "${loopdev}"p*; do
               [ -b "$part" ] || continue
-              echo "--- diagnosing $part ---"
-              sudo blkid "$part" || echo "blkid: no recognizable signature"
-              sudo file -s "$part" || true
+              if sudo blkid "$part" | grep -q 'PARTLABEL="super"'; then
+                superpart="$part"
+              fi
             done
 
-            for part in "${loopdev}"p*; do
-              [ -b "$part" ] || continue
-              for fstype in ext4 erofs f2fs vfat; do
-                if sudo mount -t "$fstype" -o ro "$part" "$dest" 2>>/tmp/mounterr; then
-                  echo "$part mounted as $fstype on $dest"; mounted=1; break 2
-                fi
-              done
-            done
+            if [ -z "$superpart" ]; then
+              echo "::error::No 'super' partition found in $img"
+              for part in "${loopdev}"p*; do sudo blkid "$part" || true; done
+              exit 1
+            fi
+            echo "Found super partition: $superpart"
 
-            if [ "$mounted" -ne 1 ]; then
-              echo "::error::Could not mount any partition of $img with a known fs type"
-              cat /tmp/mounterr 2>/dev/null
+            echo "--- super partition contents ---"
+            sudo python3 lpunpack.py --info "$superpart" || true
+
+            sudo python3 lpunpack.py "$superpart" "$outdir"
+            echo "--- extracted from $superpart ---"
+            ls -la "$outdir"
+          }
+
+          extract_super system.raw.img extracted_sys
+          extract_super vendor.raw.img extracted_vendor
+
+          # lpunpack output files are plain ext4/erofs images (no further
+          # partition wrapping) — mount whichever matches system*/vendor*.
+          mount_extracted() {
+            local pattern=$1 dest=$2
+            local f
+            f=$(ls ${pattern} 2>/dev/null | head -1)
+            if [ -z "$f" ]; then
+              echo "::error::No file matching $pattern in extraction output"
+              exit 1
+            fi
+            echo "Mounting $f"
+            if ! sudo mount -t ext4 -o ro "$f" "$dest" 2>/tmp/mounterr \
+              && ! sudo mount -t erofs -o ro "$f" "$dest" 2>>/tmp/mounterr; then
+              echo "::error::Could not mount $f as ext4 or erofs"
+              cat /tmp/mounterr
               sudo dmesg | tail -30
               exit 1
             fi
           }
 
-          mount_image system.raw.img mnt_sys
-          mount_image vendor.raw.img mnt_vendor
+          mount_extracted "extracted_sys/system*.img" mnt_sys
+          mount_extracted "extracted_vendor/vendor*.img" mnt_vendor
 
           # Keep twoyi's own scaffolding (init.superuser.rc, rom.ini,
           # sepolicy, *_contexts, init.goldfish.rc/fstab.goldfish for the
