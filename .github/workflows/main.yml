@@ -138,18 +138,16 @@ jobs:
           }
 
           extract_super system.raw.img extracted_sys
-          extract_super vendor.raw.img extracted_vendor
+          # vendor.raw.img isn't a super container at all (blkid showed a
+          # plain ext4 "vendor" partition directly) — it's a redundant
+          # standalone copy of the same vendor content already extracted
+          # from system.raw.img's super above, so there's nothing further
+          # to do with it.
 
           # lpunpack output files are plain ext4/erofs images (no further
-          # partition wrapping) — mount whichever matches system*/vendor*.
+          # partition wrapping) — mount directly.
           mount_extracted() {
-            local pattern=$1 dest=$2
-            local f
-            f=$(ls ${pattern} 2>/dev/null | head -1)
-            if [ -z "$f" ]; then
-              echo "::error::No file matching $pattern in extraction output"
-              exit 1
-            fi
+            local f=$1 dest=$2
             echo "Mounting $f"
             if ! sudo mount -t ext4 -o ro "$f" "$dest" 2>/tmp/mounterr \
               && ! sudo mount -t erofs -o ro "$f" "$dest" 2>>/tmp/mounterr; then
@@ -160,8 +158,8 @@ jobs:
             fi
           }
 
-          mount_extracted "extracted_sys/system*.img" mnt_sys
-          mount_extracted "extracted_vendor/vendor*.img" mnt_vendor
+          mount_extracted extracted_sys/system.img mnt_sys
+          mount_extracted extracted_sys/vendor.img mnt_vendor
 
           # Keep twoyi's own scaffolding (init.superuser.rc, rom.ini,
           # sepolicy, *_contexts, init.goldfish.rc/fstab.goldfish for the
