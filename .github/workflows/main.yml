@@ -1,0 +1,46 @@
+name: build-rootfs
+on: workflow_dispatch
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4   # repo holding the extracted twoyi rootfs/
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full android-sdk-libsparse-utils unzip openjdk-17-jre-headless
+
+      - name: Install sdkmanager and fetch Android 10 arm64 system image
+        run: |
+          curl -L -o cmdline-tools.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          unzip -q cmdline-tools.zip -d cmdline-tools
+          yes | ./cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$PWD/sdk --licenses
+          ./cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$PWD/sdk "system-images;android-29;google_apis;arm64-v8a"
+
+      - name: Convert sparse images to raw ext4
+        run: |
+          IMG=sdk/system-images/android-29/google_apis/arm64-v8a
+          simg2img $IMG/system.img system.raw.img
+          simg2img $IMG/vendor.img vendor.raw.img
+
+      - name: Merge into twoyi rootfs layout
+        run: |
+          mkdir -p mnt_sys mnt_vendor
+          sudo mount -o loop,ro system.raw.img mnt_sys
+          sudo mount -o loop,ro vendor.raw.img mnt_vendor
+          # keep twoyi's own scaffolding (init.superuser.rc, rom.ini, sepolicy,
+          # *_contexts, init.goldfish.rc/fstab.goldfish for the 10.0.2.x networking)
+          # replace everything under rootfs/system/ with the new build's content,
+          # then merge vendor's content into rootfs/system/vendor/
+          sudo rsync -a --delete mnt_sys/ rootfs/system/
+          sudo rsync -a mnt_vendor/ rootfs/system/vendor/
+          sudo umount mnt_sys mnt_vendor
+
+      - name: Repackage
+        run: 7z a -mx=9 custom_rootfs.7z rootfs/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: custom-rootfs
+          path: custom_rootfs.7z
