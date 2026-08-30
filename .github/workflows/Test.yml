@@ -1,0 +1,52 @@
+name: test-repackage-isolation
+
+on: workflow_dispatch
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Fetch original unmodified twoyi rootfs
+        run: |
+          curl -L -o rootfs.7z "https://github.com/Entersjkhdfkjdhfksjf/twoyi/releases/download/Resources/rootfs.7z"
+          7z x -y rootfs.7z -o./base || true
+          test -f base/rootfs/init || { echo "::error::extraction failed"; exit 1; }
+
+      - name: Restore symlinks p7zip drops on extraction
+        run: |
+          cd base/rootfs
+          ln -sf /sbin/charger charger
+          ln -sf ../init sbin/ueventd
+          ln -sf ../init sbin/watchdogd
+          ln -sf /system/lib64/libbluetooth_jni.so system/app/Bluetooth/lib/arm64/libbluetooth_jni.so
+          ln -sf /system/lib64/libcups.so system/app/BuiltInPrintService/lib/arm64/libcups.so
+          ln -sf /system/lib64/libwfds.so system/app/BuiltInPrintService/lib/arm64/libwfds.so
+          ln -sf /system/lib64/libjni_latinime.so system/app/LatinIME/lib/arm64/libjni_latinime.so
+          ln -sf /system/lib64/libdefcontainer_jni.so system/priv-app/DefaultContainerService/lib/arm64/libdefcontainer_jni.so
+          cd -
+
+      # Only change: author field, so it doesn't hit the "official ROM"
+      # branch and mask whatever getRomInfo()/isValid() actually decides.
+      # Nothing else in rom.ini or the tree is touched.
+      - name: Change only the author field in rom.ini
+        run: |
+          cat base/rootfs/rom.ini
+          sed -i 's/^author=.*/author=testauthor/' base/rootfs/rom.ini
+          echo "--- after edit ---"
+          cat base/rootfs/rom.ini
+
+      - name: Repackage with the exact same flags the main pipeline uses
+        run: |
+          cd base
+          sudo 7z a -mx=9 -ms=on -mmt=1 -snl ../test_rootfs.7z rootfs/
+          sudo chown "$(id -u)":"$(id -g)" ../test_rootfs.7z
+          echo "--- resulting archive structure ---"
+          7z l -slt ../test_rootfs.7z | grep -E "^Method|^Solid|^Blocks" | head -5
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-rootfs
+          path: test_rootfs.7z
