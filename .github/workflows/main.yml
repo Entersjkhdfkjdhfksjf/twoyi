@@ -165,7 +165,15 @@ jobs:
           # sepolicy, *_contexts, init.goldfish.rc/fstab.goldfish for the
           # 10.0.2.x networking) and replace everything under
           # rootfs/system/ with the new build's content.
-          sudo rsync -a --delete mnt_sys/ base/rootfs/system/
+          # No --delete here: twoyi ships its own additions inside system/
+          # (e.g. system/fake-libs/, a stub libart.so with no AOSP
+          # equivalent) that the loader likely depends on to consider a
+          # ROM valid. --delete would wipe anything not present in the
+          # plain AOSP system.img, taking those out with it — which is
+          # almost certainly why the first packaged ROM was rejected as
+          # invalid. Overlay instead: files present in both get replaced
+          # by the newer Android 10 version, twoyi-only files survive.
+          sudo rsync -a mnt_sys/ base/rootfs/system/
           sudo rsync -a mnt_vendor/ base/rootfs/system/vendor/
 
           sudo umount mnt_sys mnt_vendor
