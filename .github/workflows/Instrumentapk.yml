@@ -8,19 +8,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # AGP 7.1.1 (pinned in this project's build.gradle) requires JDK 11 —
-      # not JDK 17, which is fine for sdkmanager/other tooling but breaks
-      # this specific Gradle build.
-      - name: Set up JDK 11
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '11'
-
       - name: Install packaging tools
         run: sudo apt-get update && sudo apt-get install -y p7zip-full unzip zip
 
-      # --- Android SDK matching this project's exact pins ---
+      # --- Android SDK matching this project's exact pins. Runs on the
+      # runner's own pre-installed default JDK (17+) — sdkmanager itself
+      # requires that, separately from whatever JDK later compiles the
+      # actual project. Don't activate JDK 11 until after this step. ---
       - name: Install Android SDK platform + build-tools
         run: |
           curl -L -o cmdline-tools.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
@@ -30,6 +24,14 @@ jobs:
             "platforms;android-31" "build-tools;30.0.3" "platform-tools"
           echo "ANDROID_HOME=$PWD/sdk" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$PWD/sdk" >> $GITHUB_ENV
+
+      # AGP 7.1.1 (pinned in this project's build.gradle) requires JDK 11 —
+      # activated now, after sdkmanager (which needed 17+) has already run.
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
 
       # --- Reuse the official build's Rust component unchanged — only
       # Java changed, so no NDK/cargo-xdk toolchain needed at all. ---
