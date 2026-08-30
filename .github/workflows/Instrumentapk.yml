@@ -1,0 +1,110 @@
+name: build-instrumented-apk
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # AGP 7.1.1 (pinned in this project's build.gradle) requires JDK 11 —
+      # not JDK 17, which is fine for sdkmanager/other tooling but breaks
+      # this specific Gradle build.
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full unzip zip
+
+      # --- Android SDK matching this project's exact pins ---
+      - name: Install Android SDK platform + build-tools
+        run: |
+          curl -L -o cmdline-tools.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          unzip -q cmdline-tools.zip -d cmdline-tools
+          yes | ./cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$PWD/sdk --licenses > /dev/null
+          ./cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$PWD/sdk \
+            "platforms;android-31" "build-tools;30.0.3" "platform-tools"
+          echo "ANDROID_HOME=$PWD/sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$PWD/sdk" >> $GITHUB_ENV
+
+      # --- Reuse the official build's Rust component unchanged — only
+      # Java changed, so no NDK/cargo-xdk toolchain needed at all. ---
+      - name: Fetch official 0.5.4 APK and extract its libtwoyi.so
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download 0.5.4 --repo twoyi/twoyi -p "*.apk" -O twoyi_official.apk
+          mkdir official_extracted
+          unzip -q twoyi_official.apk -d official_extracted
+          ls -la official_extracted/lib/arm64-v8a/
+          cp official_extracted/lib/arm64-v8a/libtwoyi.so app/src/main/jniLibs/arm64-v8a/libtwoyi.so
+
+      # --- Build the exact same test rootfs we've been testing ---
+      - name: Fetch base twoyi rootfs
+        run: |
+          curl -L -o rootfs.7z "https://github.com/Entersjkhdfkjdhfksjf/twoyi/releases/download/Resources/rootfs.7z"
+          7z x -y rootfs.7z -o./base || true
+          test -f base/rootfs/init || { echo "::error::extraction failed"; exit 1; }
+
+      - name: Restore symlinks p7zip drops on extraction
+        run: |
+          cd base/rootfs
+          ln -sf /sbin/charger charger
+          ln -sf ../init sbin/ueventd
+          ln -sf ../init sbin/watchdogd
+          ln -sf /system/lib64/libbluetooth_jni.so system/app/Bluetooth/lib/arm64/libbluetooth_jni.so
+          ln -sf /system/lib64/libcups.so system/app/BuiltInPrintService/lib/arm64/libcups.so
+          ln -sf /system/lib64/libwfds.so system/app/BuiltInPrintService/lib/arm64/libwfds.so
+          ln -sf /system/lib64/libjni_latinime.so system/app/LatinIME/lib/arm64/libjni_latinime.so
+          ln -sf /system/lib64/libdefcontainer_jni.so system/priv-app/DefaultContainerService/lib/arm64/libdefcontainer_jni.so
+          cd -
+
+      - name: Change only the author field in rom.ini
+        run: |
+          sed -i 's/^author=.*/author=testauthor/' base/rootfs/rom.ini
+          cat base/rootfs/rom.ini
+
+      - name: Repackage and bake into the app's default assets
+        run: |
+          cd base
+          7z a -mx=9 -ms=on -mmt=1 -snl ../rootfs_test.7z rootfs/
+          cd ..
+          cp rootfs_test.7z app/src/main/assets/rootfs.7z
+
+      # --- Build (Java/resources only — cargoBuild disabled in app/build.gradle) ---
+      - name: Build with Gradle
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Locate build output
+        run: find app/build/outputs -name "*.apk"
+
+      # --- Align and sign (release build has no signing config, so this
+      # is required regardless of what changed) ---
+      - name: Align and sign
+        run: |
+          BUILD_TOOLS=sdk/build-tools/30.0.3
+          UNSIGNED_APK=$(find app/build/outputs -name "*.apk" | head -1)
+          echo "Unsigned APK: $UNSIGNED_APK"
+
+          $BUILD_TOOLS/zipalign -f -p 4 "$UNSIGNED_APK" twoyi_instrumented_aligned.apk
+
+          keytool -genkeypair -v -keystore test.keystore -alias testkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass testpass -keypass testpass \
+            -dname "CN=Test, OU=Test, O=Test, L=Test, S=Test, C=US"
+
+          $BUILD_TOOLS/apksigner sign --ks test.keystore --ks-pass pass:testpass \
+            --out twoyi_instrumented_signed.apk twoyi_instrumented_aligned.apk
+
+          $BUILD_TOOLS/apksigner verify twoyi_instrumented_signed.apk && echo "signature OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twoyi-instrumented-apk
+          path: twoyi_instrumented_signed.apk
