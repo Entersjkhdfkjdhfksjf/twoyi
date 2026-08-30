@@ -1,0 +1,92 @@
+name: swap-rom-into-apk
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full unzip zip openjdk-17-jre-headless
+
+      # --- Build the exact same test rootfs we've been testing via Replace ROM ---
+      - name: Fetch base twoyi rootfs
+        run: |
+          curl -L -o rootfs.7z "https://github.com/Entersjkhdfkjdhfksjf/twoyi/releases/download/Resources/rootfs.7z"
+          7z x -y rootfs.7z -o./base || true
+          test -f base/rootfs/init || { echo "::error::extraction failed"; exit 1; }
+
+      - name: Restore symlinks p7zip drops on extraction
+        run: |
+          cd base/rootfs
+          ln -sf /sbin/charger charger
+          ln -sf ../init sbin/ueventd
+          ln -sf ../init sbin/watchdogd
+          ln -sf /system/lib64/libbluetooth_jni.so system/app/Bluetooth/lib/arm64/libbluetooth_jni.so
+          ln -sf /system/lib64/libcups.so system/app/BuiltInPrintService/lib/arm64/libcups.so
+          ln -sf /system/lib64/libwfds.so system/app/BuiltInPrintService/lib/arm64/libwfds.so
+          ln -sf /system/lib64/libjni_latinime.so system/app/LatinIME/lib/arm64/libjni_latinime.so
+          ln -sf /system/lib64/libdefcontainer_jni.so system/priv-app/DefaultContainerService/lib/arm64/libdefcontainer_jni.so
+          cd -
+
+      - name: Change only the author field in rom.ini
+        run: |
+          sed -i 's/^author=.*/author=testauthor/' base/rootfs/rom.ini
+          cat base/rootfs/rom.ini
+
+      - name: Repackage as rootfs.7z (same flags as the validated pipeline)
+        run: |
+          cd base
+          sudo 7z a -mx=9 -ms=on -mmt=1 -snl ../rootfs_test.7z rootfs/
+          sudo chown "$(id -u)":"$(id -g)" ../rootfs_test.7z
+
+      # --- Fetch the official APK matching your installed version exactly ---
+      - name: Download official twoyi 0.5.4 APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download 0.5.4 --repo twoyi/twoyi -p "*.apk" -O twoyi.apk
+          ls -la twoyi.apk
+
+      # --- Swap the bundled asset ---
+      - name: Replace assets/rootfs.7z inside the APK
+        run: |
+          mkdir apk_extracted
+          cd apk_extracted
+          unzip -q ../twoyi.apk -d .
+          ls -la assets/rootfs.7z
+          cp ../rootfs_test.7z assets/rootfs.7z
+          # Repack. -X strips extra fields zip sometimes adds that can
+          # confuse strict zip readers; APKs are just zip files, but we
+          # still need to align + resign below since content changed.
+          zip -q -X -r ../twoyi_patched_unsigned.apk .
+          cd ..
+
+      # --- Align and re-sign (required — original signature no longer matches) ---
+      - name: Install build-tools and sign
+        run: |
+          curl -L -o cmdline-tools.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          unzip -q cmdline-tools.zip -d cmdline-tools
+          yes | ./cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$PWD/sdk --licenses > /dev/null
+          ./cmdline-tools/cmdline-tools/bin/sdkmanager --sdk_root=$PWD/sdk "build-tools;34.0.0"
+
+          BUILD_TOOLS=sdk/build-tools/34.0.0
+
+          $BUILD_TOOLS/zipalign -f -p 4 twoyi_patched_unsigned.apk twoyi_patched_aligned.apk
+
+          keytool -genkeypair -v -keystore test.keystore -alias testkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass testpass -keypass testpass \
+            -dname "CN=Test, OU=Test, O=Test, L=Test, S=Test, C=US"
+
+          $BUILD_TOOLS/apksigner sign --ks test.keystore --ks-pass pass:testpass \
+            --out twoyi_patched_signed.apk twoyi_patched_aligned.apk
+
+          $BUILD_TOOLS/apksigner verify twoyi_patched_signed.apk && echo "signature OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twoyi-patched-apk
+          path: twoyi_patched_signed.apk
