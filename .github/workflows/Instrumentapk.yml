@@ -73,7 +73,8 @@ jobs:
       - name: Repackage and bake into the app's default assets
         run: |
           cd base
-          7z a -mx=9 -ms=on -mmt=1 -snl ../rootfs_test.7z rootfs/
+          sudo 7z a -mx=9 -ms=on -mmt=1 -snl ../rootfs_test.7z rootfs/
+          sudo chown "$(id -u)":"$(id -g)" ../rootfs_test.7z
           cd ..
           cp rootfs_test.7z app/src/main/assets/rootfs.7z
 
