@@ -56,11 +56,14 @@ task cargoBuild {
     }
 }
 
-tasks.whenTaskAdded { task ->
-    if ((task.name == 'javaPreCompileDebug' || task.name == 'javaPreCompileRelease')) {
-        task.dependsOn 'cargoBuild'
-    }
-}
+// cargoBuild disabled for this instrumented build: no Rust code changed,
+// so we reuse the official release's prebuilt libtwoyi.so (dropped into
+// jniLibs by the CI workflow) instead of setting up a Rust/NDK toolchain.
+// tasks.whenTaskAdded { task ->
+//     if ((task.name == 'javaPreCompileDebug' || task.name == 'javaPreCompileRelease')) {
+//         task.dependsOn 'cargoBuild'
+//     }
+// }
 
 dependencies {
 
