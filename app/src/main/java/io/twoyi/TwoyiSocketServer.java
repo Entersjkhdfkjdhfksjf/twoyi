@@ -4,18 +4,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
-
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
-
 package io.twoyi;
 
 import android.content.Context;
@@ -114,6 +102,7 @@ public class TwoyiSocketServer {
     }
 
     private void handleSocket(LocalSocket socket) {
+        Log.i(TAG, "DIAG: guest connected to TWOYI_SOCK, t=" + SystemClock.elapsedRealtime());
         EXECUTOR.submit(() -> handleSocket0(socket));
     }
 
@@ -125,19 +114,28 @@ public class TwoyiSocketServer {
             while (!currentThread.isInterrupted()) {
                 byte[] data = new byte[1024];
                 int read = inputStream.read(data);
-                handleData(new String(data, 0, read, StandardCharsets.US_ASCII));
+                if (read <= 0) {
+                    Log.i(TAG, "DIAG: TWOYI_SOCK read returned " + read + " (connection closed/EOF), t=" + SystemClock.elapsedRealtime());
+                    break;
+                }
+                String msg = new String(data, 0, read, StandardCharsets.US_ASCII);
+                Log.i(TAG, "DIAG: TWOYI_SOCK raw message received: \"" + msg + "\", t=" + SystemClock.elapsedRealtime());
+                handleData(msg);
             }
 
-        } catch (IOException ignored) {
+        } catch (IOException e) {
+            Log.i(TAG, "DIAG: TWOYI_SOCK handleSocket0 IOException: " + e, e);
         }
     }
 
     private void handleData(String msg) {
+        Log.i(TAG, "DIAG: handleData dispatch for: \"" + msg + "\"");
         if (msg.startsWith(SWITCH_HOST)) {
             // switch host system
             TwoyiStatusManager.getInstance().switchOs(mContext);
         } else if (msg.startsWith(BOOT_COMPLETED)) {
             // machine started
+            Log.i(TAG, "DIAG: BOOT_COMPLETED message matched, calling markStarted(), t=" + SystemClock.elapsedRealtime());
             TwoyiStatusManager.getInstance().markStarted();
         } else if (msg.startsWith(JUMP_HOST_SETTINGS)) {
             // UIHelper.startActivity(mContext, AboutActivity.class);
