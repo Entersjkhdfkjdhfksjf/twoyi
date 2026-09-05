@@ -4,18 +4,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
-
-/*
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
-
 package io.twoyi;
 
 import android.app.Activity;
@@ -205,10 +193,12 @@ public class Render2Activity extends Activity implements View.OnTouchListener {
 
             if (true) {
                 boolean success = false;
+                Log.i(TAG, "DIAG: waitBoot starting, t=" + SystemClock.elapsedRealtime());
                 try {
                     success = TwoyiStatusManager.getInstance().waitBoot(15, TimeUnit.SECONDS);
                 } catch (Throwable ignored) {
                 }
+                Log.i(TAG, "DIAG: waitBoot returned " + success + ", t=" + SystemClock.elapsedRealtime());
 
                 if (!success) {
                     LogEvents.trackBootFailure(getApplicationContext());
