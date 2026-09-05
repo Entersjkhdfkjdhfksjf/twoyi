@@ -6,267 +6,140 @@
 
 package io.twoyi;
 
-import android.app.Activity;
-import android.os.Bundle;
+import android.content.Context;
+import android.net.LocalServerSocket;
+import android.net.LocalSocket;
+import android.net.LocalSocketAddress;
 import android.os.SystemClock;
-import android.util.DisplayMetrics;
 import android.util.Log;
-import android.view.Display;
-import android.view.KeyEvent;
-import android.view.MotionEvent;
-import android.view.Surface;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
-import android.view.View;
-import android.view.ViewGroup;
-import android.view.WindowManager;
-import android.widget.TextView;
-import android.widget.Toast;
 
-import androidx.annotation.NonNull;
-
-import com.cleveroad.androidmanimation.LoadingAnimationView;
-
-import java.util.concurrent.TimeUnit;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import io.twoyi.utils.AppKV;
-import io.twoyi.utils.LogEvents;
-import io.twoyi.utils.NavUtils;
-import io.twoyi.utils.RomManager;
+import io.twoyi.ui.SettingsActivity;
+import io.twoyi.utils.IOUtils;
+import io.twoyi.utils.UIHelper;
 
 /**
  * @author weishu
- * @date 2021/10/20.
+ * @date 2021/10/27.
  */
-public class Render2Activity extends Activity implements View.OnTouchListener {
 
-    private static final String TAG = "Render2Activity";
+public class TwoyiSocketServer {
 
-    private SurfaceView mSurfaceView;
+    private static final String TAG = "TwoyiSocketServer";
 
-    private ViewGroup mRootView;
-    private LoadingAnimationView mLoadingView;
-    private TextView mLoadingText;
-    private View mLoadingLayout;
-    private View mBootLogView;
+    private static TwoyiSocketServer INSTANCE;
 
-    private final AtomicBoolean mIsExtracting = new AtomicBoolean(false);
+    private static final String SOCK_NAME = "TWOYI_SOCK";
 
-    private final SurfaceHolder.Callback mSurfaceCallback = new SurfaceHolder.Callback() {
-        @Override
-        public void surfaceCreated(@NonNull SurfaceHolder holder) {
-            Surface surface = holder.getSurface();
-            WindowManager windowManager = getWindowManager();
-            Display defaultDisplay = windowManager.getDefaultDisplay();
-            DisplayMetrics displayMetrics = new DisplayMetrics();
-            defaultDisplay.getRealMetrics(displayMetrics);
+    private static final String SWITCH_HOST = "SWITCH_HOST";
+    private static final String BOOT_COMPLETED = "BOOT_COMPLETED";
 
-            float xdpi = displayMetrics.xdpi;
-            float ydpi = displayMetrics.ydpi;
+    private static final String JUMP_HOST_SETTINGS= "SETTINGS";
 
-            Renderer.init(surface, RomManager.getLoaderPath(getApplicationContext()), xdpi, ydpi, (int) getBestFps());
+    private static ExecutorService EXECUTOR = Executors.newCachedThreadPool();
 
-            Log.i(TAG, "surfaceCreated");
-        }
+    private final AtomicBoolean mStarted = new AtomicBoolean(false);
+    private final Context mContext;
 
-        @Override
-        public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {
-            Surface surface = holder.getSurface();
-            Renderer.resetWindow(surface, 0, 0, mSurfaceView.getWidth(), mSurfaceView.getHeight());
-            Log.i(TAG, "surfaceChanged: " + mSurfaceView.getWidth() + "x" + mSurfaceView.getHeight());
-        }
-
-        @Override
-        public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
-            Renderer.removeWindow(holder.getSurface());
-            Log.i(TAG, "surfaceDestroyed!");
-        }
-    };
-
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        boolean started = TwoyiStatusManager.getInstance().isStarted();
-        Log.i(TAG, "onCreate: " + savedInstanceState + " isStarted: " + started);
-
-        if (started) {
-            // we have been started, but WTF we are onCreate again? just reboot ourself.
-            finish();
-            RomManager.reboot(this);
-            return;
-        }
-
-        // reset state
-        TwoyiStatusManager.getInstance().reset();
-
-        NavUtils.hideNavigation(getWindow());
-
-        super.onCreate(savedInstanceState);
-
-        setContentView(R.layout.ac_render);
-        mRootView = findViewById(R.id.root);
-
-        mSurfaceView = new SurfaceView(this);
-        mSurfaceView.getHolder().addCallback(mSurfaceCallback);
-
-        mLoadingLayout = findViewById(R.id.loadingLayout);
-        mLoadingView = findViewById(R.id.loading);
-        mLoadingText = findViewById(R.id.loadingText);
-        mBootLogView = findViewById(R.id.bootlog);
-
-        mLoadingLayout.setVisibility(View.VISIBLE);
-        mLoadingView.startAnimation();
-
-        UITips.checkForAndroid12(this, this::bootSystem);
-
-        mSurfaceView.setOnTouchListener(this);
-
+    private TwoyiSocketServer(Context context) {
+        mContext = context;
     }
 
-    @Override
-    protected void onRestoreInstanceState(@NonNull Bundle savedInstanceState) {
-        super.onRestoreInstanceState(savedInstanceState);
-        Log.i(TAG, "onRestoreInstanceState: " + savedInstanceState);
-
-        // we don't support state restore, just reboot.
-        finish();
-        RomManager.reboot(this);
-    }
-
-    private void bootSystem() {
-        boolean romExist = RomManager.romExist(this);
-        boolean factoryRomUpdated = RomManager.needsUpgrade(this);
-        boolean forceInstall = AppKV.getBooleanConfig(getApplicationContext(), AppKV.FORCE_ROM_BE_RE_INSTALL, false);
-        boolean use3rdRom = AppKV.getBooleanConfig(getApplicationContext(), AppKV.SHOULD_USE_THIRD_PARTY_ROM, false);
-
-        boolean shouldExtractRom = !romExist || forceInstall || (!use3rdRom && factoryRomUpdated);
-
-        if (shouldExtractRom) {
-            Log.i(TAG, "extracting rom...");
-
-            showTipsForFirstBoot();
-
-            new Thread(() -> {
-                mIsExtracting.set(true);
-                RomManager.extractRootfs(getApplicationContext(), romExist, factoryRomUpdated, forceInstall, use3rdRom);
-                mIsExtracting.set(false);
-
-                RomManager.initRootfs(getApplicationContext());
-
-                runOnUiThread(() -> {
-                    mRootView.addView(mSurfaceView, 0);
-                    showBootingProcedure();
-                });
-            }, "extract-rom").start();
-        } else {
-            mRootView.addView(mSurfaceView, 0);
-            showBootingProcedure();
+    public static TwoyiSocketServer getInstance(Context context) {
+        if (INSTANCE == null) {
+            INSTANCE = new TwoyiSocketServer(context);
         }
+
+        return INSTANCE;
     }
 
-    private void showTipsForFirstBoot() {
-        mLoadingText.setText(R.string.extracting_tips);
-        mRootView.postDelayed(() -> {
-            if (mIsExtracting.get()) {
-                mLoadingText.setText(R.string.first_boot_tips);
-            }
-        }, 5000);
+    public void start() {
+        if (mStarted.compareAndSet(false, true)) {
+            EXECUTOR.submit(this::start0);
 
-        mRootView.postDelayed(() -> {
-            if (mIsExtracting.get()) {
-                mLoadingText.setText(R.string.first_boot_tips2);
-            }
-        }, 10 * 1000);
+            EXECUTOR.submit(()-> {
 
-        mRootView.postDelayed(() -> {
-            if (mIsExtracting.get()) {
-                mLoadingText.setText(R.string.first_boot_tips3);
-            }
-        }, 15 * 1000);
-    }
+                // some device restrict local socket, just connect it to prompt the permission dialog.
+                SystemClock.sleep(3000);
 
-    private void showBootingProcedure() {
-        // mLoadingText.setText(R.string.booting_tips);
-        mLoadingText.setVisibility(View.GONE);
-        mBootLogView.setVisibility(View.VISIBLE);
-        new Thread(() -> {
-
-            if (true) {
-                boolean success = false;
-                Log.i(TAG, "DIAG: waitBoot starting, t=" + SystemClock.elapsedRealtime());
-                try {
-                    success = TwoyiStatusManager.getInstance().waitBoot(15, TimeUnit.SECONDS);
-                } catch (Throwable ignored) {
-                }
-                Log.i(TAG, "DIAG: waitBoot returned " + success + ", t=" + SystemClock.elapsedRealtime());
-
-                if (!success) {
-                    LogEvents.trackBootFailure(getApplicationContext());
-
-                    runOnUiThread(() -> Toast.makeText(getApplicationContext(), R.string.boot_failed, Toast.LENGTH_SHORT).show());
-
-                    // waiting for track
-                    SystemClock.sleep(3000);
-
-                    finish();
-                    System.exit(0);
-                    return;
-                }
-            }
-
-            runOnUiThread(() -> {
-                mLoadingView.stopAnimation();
-                mLoadingLayout.setVisibility(View.GONE);
+                // SEND PING
+                TwoyiMessenger.getInstance().send(TwoyiMessenger.PING);
             });
-        }, "waiting-boot").start();
-    }
-
-    @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
-        super.onWindowFocusChanged(hasFocus);
-
-        if (hasFocus) {
-            NavUtils.hideNavigation(getWindow());
         }
-
-        // Update global visibility.
-        TwoyiStatusManager.getInstance().updateVisibility(hasFocus);
     }
 
-    @Override
-    public boolean onTouch(View v, MotionEvent event) {
-        Renderer.handleTouch(event);
-        return true;
-    }
+    private void start0() {
+        LocalSocket socket = null;
+        try {
+            socket = new LocalSocket(LocalSocket.SOCKET_SEQPACKET);
+            socket.bind(new LocalSocketAddress(SOCK_NAME, LocalSocketAddress.Namespace.ABSTRACT));
+            LocalServerSocket localServerSocket = new LocalServerSocket(socket.getFileDescriptor());
 
-    @Override
-    public boolean onKeyDown(int keyCode, KeyEvent event) {
-        Log.d(TAG, "onKeyDown: " + keyCode);
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            // TODO: 2021/10/26 Add Volume control
-        }
-        return super.onKeyDown(keyCode, event);
-    }
-
-    @Override
-    public void onBackPressed() {
-        // super.onBackPressed();
-        Renderer.sendKeycode(KeyEvent.KEYCODE_HOME);
-    }
-
-    private float getBestFps() {
-        WindowManager windowManager = getWindowManager();
-        Display defaultDisplay = windowManager.getDefaultDisplay();
-        Display.Mode[] supportedModes = defaultDisplay.getSupportedModes();
-        float fps = 45;
-        for (Display.Mode supportedMode : supportedModes) {
-            float refreshRate = supportedMode.getRefreshRate();
-            if (refreshRate > fps) {
-                // fps = refreshRate;
+            Thread currentThread = Thread.currentThread();
+            while (!currentThread.isInterrupted()) {
+                LocalSocket localSocket = localServerSocket.accept();
+                handleSocket(localSocket);
             }
-        }
+        } catch (IOException e) {
+            Log.e(TAG, "start socket failed", e);
 
-        Log.w(TAG, "current fps: " + fps);
-        return fps;
+            mStarted.set(false);
+
+            // start it again
+            SystemClock.sleep(1000);
+
+            start();
+
+        } finally {
+            IOUtils.closeSilently(socket);
+        }
+    }
+
+    private void handleSocket(LocalSocket socket) {
+        Log.i(TAG, "DIAG: guest connected to TWOYI_SOCK, t=" + SystemClock.elapsedRealtime());
+        EXECUTOR.submit(() -> handleSocket0(socket));
+    }
+
+    private void handleSocket0(LocalSocket socket) {
+        try {
+            InputStream inputStream = socket.getInputStream();
+            Thread currentThread = Thread.currentThread();
+
+            while (!currentThread.isInterrupted()) {
+                byte[] data = new byte[1024];
+                int read = inputStream.read(data);
+                if (read <= 0) {
+                    Log.i(TAG, "DIAG: TWOYI_SOCK read returned " + read + " (connection closed/EOF), t=" + SystemClock.elapsedRealtime());
+                    break;
+                }
+                String msg = new String(data, 0, read, StandardCharsets.US_ASCII);
+                Log.i(TAG, "DIAG: TWOYI_SOCK raw message received: \"" + msg + "\", t=" + SystemClock.elapsedRealtime());
+                handleData(msg);
+            }
+
+        } catch (IOException e) {
+            Log.i(TAG, "DIAG: TWOYI_SOCK handleSocket0 IOException: " + e, e);
+        }
+    }
+
+    private void handleData(String msg) {
+        Log.i(TAG, "DIAG: handleData dispatch for: \"" + msg + "\"");
+        if (msg.startsWith(SWITCH_HOST)) {
+            // switch host system
+            TwoyiStatusManager.getInstance().switchOs(mContext);
+        } else if (msg.startsWith(BOOT_COMPLETED)) {
+            // machine started
+            Log.i(TAG, "DIAG: BOOT_COMPLETED message matched, calling markStarted(), t=" + SystemClock.elapsedRealtime());
+            TwoyiStatusManager.getInstance().markStarted();
+        } else if (msg.startsWith(JUMP_HOST_SETTINGS)) {
+            // UIHelper.startActivity(mContext, AboutActivity.class);
+            UIHelper.startActivity(mContext, SettingsActivity.class);
+        }
     }
 }
