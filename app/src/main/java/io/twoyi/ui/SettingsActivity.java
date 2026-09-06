@@ -258,7 +258,7 @@ public class SettingsActivity extends AppCompatActivity {
                         //return;
                     // Disabling Rom author check for debugging, will probably forget to enable it but who cares 🫃
 
-                    }
+                    //}
                     UIHelper.getDialogBuilder(activity)
                             .setTitle(R.string.replace_rom_confirm_title)
                             .setMessage(getString(R.string.replace_rom_confirm_message, author, romInfo.version, romInfo.desc))
