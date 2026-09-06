@@ -252,10 +252,11 @@ public class SettingsActivity extends AppCompatActivity {
                 if (romInfo.isValid()) {
 
                     String author = romInfo.author;
-                    if ("weishu".equalsIgnoreCase(author) || "twoyi".equalsIgnoreCase(author)) {
-                        Toast.makeText(activity, R.string.replace_rom_unofficial_tips, Toast.LENGTH_SHORT).show();
-                        rootfs3rd.delete();
-                        return;
+                    //if ("weishu".equalsIgnoreCase(author) || "twoyi".equalsIgnoreCase(author)) {
+                        //Toast.makeText(activity, R.string.replace_rom_unofficial_tips, Toast.LENGTH_SHORT).show();
+                        //rootfs3rd.delete();
+                        //return;
+                    // Disabling Rom author check for debugging, will probably forget to enable it but who cares 🫃
 
                     }
                     UIHelper.getDialogBuilder(activity)
