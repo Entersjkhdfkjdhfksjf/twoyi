@@ -282,9 +282,56 @@ public final class RomManager {
     public static int extractRootfs(Context context, File rootfs7z) {
 
         int cpu = Runtime.getRuntime().availableProcessors();
-        return P7ZipApi.executeCommand(String.format(Locale.US, "7z x -mmt=%d -aoa '%s' '-o%s'",
+        int ret = P7ZipApi.executeCommand(String.format(Locale.US, "7z x -mmt=%d -aoa '%s' '-o%s'",
                 cpu, rootfs7z, context.getDataDir()));
+
+        verifyExtractedFiles(context);
+
+        return ret;
     }
+
+    private static void verifyExtractedFiles(Context context) {
+        // DIAG: known-good MD5s from the pristine original rootfs, to
+        // directly test whether on-device extraction is corrupting
+        // anything, rather than continuing to infer it indirectly.
+        String[][] checks = {
+                {"system/bin/surfaceflinger", "04d9381dd9ee36a5c07c0ec374613e04"},
+                {"system/bin/app_process64", "af845f685bc02d0fba124cf7f5d4ab3c"},
+                {"system/lib64/libEGL.so", "2b452d9a88a10660146a35b7af7a2dfc"},
+                {"system/lib64/libhwui.so", "eb8dc0b31cf62d90bc37a76dc439f17a"},
+                {"system/lib64/libbinder.so", "d856a2e6276c4ba21865cd362d7d9de2"},
+                {"system/framework/oat/arm64/services.vdex", "4159f7532fcef79d3ce67f36a2b3a84b"},
+        };
+        File rootfsDir = new File(context.getDataDir(), "rootfs");
+        for (String[] check : checks) {
+            File f = new File(rootfsDir, check[0]);
+            String expected = check[1];
+            if (!f.exists()) {
+                Log.i(TAG, "DIAG: verify " + check[0] + " -> MISSING");
+                continue;
+            }
+            try (InputStream is = new java.io.FileInputStream(f)) {
+                java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = is.read(buf)) > 0) {
+                    md.update(buf, 0, n);
+                }
+                StringBuilder sb = new StringBuilder();
+                for (byte b : md.digest()) {
+                    sb.append(String.format("%02x", b));
+                }
+                String actual = sb.toString();
+                boolean match = actual.equalsIgnoreCase(expected);
+                Log.i(TAG, "DIAG: verify " + check[0] + " -> " + actual
+                        + (match ? " MATCH" : " MISMATCH (expected " + expected + ")"));
+            } catch (Exception e) {
+                Log.i(TAG, "DIAG: verify " + check[0] + " -> ERROR " + e);
+            }
+        }
+    }
+
+    public static boolean extractRootfsInAssets(Context context) {
 
     public static boolean extractRootfsInAssets(Context context) {
 
