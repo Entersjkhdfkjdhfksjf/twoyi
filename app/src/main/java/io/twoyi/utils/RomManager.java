@@ -333,8 +333,6 @@ public final class RomManager {
 
     public static boolean extractRootfsInAssets(Context context) {
 
-    public static boolean extractRootfsInAssets(Context context) {
-
         // read assets
         long t1 = SystemClock.elapsedRealtime();
         File rootfs7z = context.getFileStreamPath(ROOTFS_NAME);
